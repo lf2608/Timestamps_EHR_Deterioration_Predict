@@ -12,7 +12,7 @@ Li-Heng Fu, MD, MA1, Chris Knaplund1, Kenrick Cato, RN, PhD2, Adler Perotte1, MD
 
 ##Motivation
 
-We propose an algorithm that utilizes only timestamps of longitudinal electronic health record (EHR) data (i.e., time and co-occurrence of vital sign measurements, flowsheets comments, order entry, and nursing notes) to predict clinical deterioration events. These time-series data reflect nurses’ decision-making related to patient surveillance[16 18]. We emphasize that our data for analysis does not include any measurement values (i.e., heart rate = 90mHg). This study aims to 1) validate the proposed prediction models built on the time series of data entry timestamps that reflect the healthcare process, 2) and evaluate the impact of including a variable representing time in the model.
+We propose an algorithm that utilizes only timestamps of longitudinal electronic health record (EHR) data (i.e., time and co-occurrence of vital sign measurements, flowsheets comments, order entry, and nursing notes) to predict clinical deterioration events. These time-series data reflect nurses’ decision-making related to patient surveillance. We emphasize that our data for analysis does not include any measurement values (i.e., heart rate = 90mHg). This study aims to 1) validate the proposed prediction models built on the time series of data entry timestamps that reflect the healthcare process, 2) and evaluate the impact of including a variable representing time in the model.
 
 ##Structure
 

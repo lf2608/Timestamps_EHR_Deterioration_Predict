@@ -12,17 +12,12 @@ Li-Heng Fu, MD, MA1, Chris Knaplund1, Kenrick Cato, RN, PhD2, Adler Perotte1, MD
 
 ##Motivation
 
-We propose an algorithm that utilizes only timestamps of longitudinal electronic health record (EHR) data (i.e., time and co-occurrence of vital sign measurements, flowsheets comments, order entry, and nursing notes) to predict clinical deterioration events. These time-series data reflect nurses’ decision-making related to patient surveillance. We emphasize that our data for analysis does not include any measurement values (i.e., heart rate = 90mHg). This study aims to 1) validate the proposed prediction models built on the time series of data entry timestamps that reflect the healthcare process, 2) and evaluate the impact of including a variable representing time in the model.
+We propose an algorithm that utilizes only timestamps of longitudinal electronic health record (EHR) data (i.e., time and co-occurrence of vital sign measurements, flowsheets comments, order entries, and nursing notes) to predict clinical deterioration events. These time-series data reflect nurses’ decision-making related to patient surveillance. We emphasize that our data for analysis does not include any measurement values (i.e., heart rate = 90mHg). This study aims to 1) validate the proposed prediction models built on sequence of timestamps of underlying clinical data that reflect healthcare process, 2) and evaluate the impact of including a variable representing time-of-day in the model.
 
 ##Structure
 
 This github folder contains the original source codes for the original article by Fu et al. 
-- The Create_dataset.ipynb file converts original healthcare data into formated dataset  ready for machine learning 
-- The Model Derivation and Validation.ipynb provides all models that were built in this manucript. 
+- The data_preprocessing_pipeline.py converts original healthcare data into formated dataset for machine learning 
+- The modeling_pipeline_single_point.py contains pipelines for model selection, model traininng and validation using logistic regression and random forest classifier. 
+- The modeling_pipeline_rnn.py contains pipelines for model selection, model traininng and validation for RNNs
 
-##Models
-
-- Logistic Regression with L2 Regularization
-- Deep Neural Network
-- LSTM
-- GRU

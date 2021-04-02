@@ -1,23 +1,8 @@
-from tqdm import tqdm
-import tensorflow as tf
-from sklearn.utils import resample, shuffle
-from sklearn.model_selection import train_test_split
-from kerastuner.tuners import RandomSearch, Hyperband
-from kerastuner import HyperModel
-import kerastuner as kt
-import numpy as np
-import pandas as pd
 
-from Source_code.plot_metrics import plot_cm, plot_pr_curve, plot_roc
-
-
-def get_results_table():
+def get_results_table(directory, sampling, step_lengths, time_of_day, calculate_CI=False):
     results = []
-    sampling = ['last']
-    step_lengths = [15, 30, 60]
-    time_of_day = [True, False]
     algorithm_list = ['GRU', 'LSTM']
-    column = ['AUROC', 'AUPRC', 'sensibility', 'specificity', 'PPV', 'NPV', 'FScore']
+    column = ['AUROC', 'AUPRC', 'sensitivity', 'specificity', 'PPV', 'NPV', 'FScore']
 
     for algorithm in tqdm(algorithm_list):
         print(algorithm)
@@ -27,15 +12,17 @@ def get_results_table():
                 print(time)
                 for length in step_lengths:
                     print(length)
-                    x = BuildAlgorithms(sampling_method=method, timestep_length=length,
-                                        algorithm=algorithm, time_of_day=time)
-                    results.append(list(x.get_results()))
+                    x = BuildAlgorithms(directory=directory, sampling_method=method, timestep_length=length,
+                                        algorithm=algorithm, time_of_day=time,
+                                        vitals=True, v_order=True, med_order=True,
+                                        comments=True, notes=True, normalized=False)
+                    results.append(list(x.get_results(calculate_CI=calculate_CI)))
     return pd.DataFrame(results, columns=column, index=pd.MultiIndex.from_product([algorithm_list, sampling,
                                                                                    time_of_day, step_lengths]))
 
 
 class BuildAlgorithms(object):
-    _DIRECTORY = '/home/user/dataset/'
+    _DIRECTORY = '/home/liheng/Mat/Source_code/dataset/'
     _EPOCHS = 1000
     _BATCH_SIZE = 128
 
@@ -58,7 +45,7 @@ class BuildAlgorithms(object):
 
     def __init__(self, directory=None, sampling_method='last', timestep_length=60, algorithm=None, epochs=None,
                  batch_size=None, early_stopping=None, metrics=None, vitals=True, v_order=True,
-                 med_order=True, comments=True, notes=True, time_of_day=True):
+                 med_order=True, comments=True, notes=True, time_of_day=True, normalized=False):
         self.__directory = directory or self._DIRECTORY
         self.__method = sampling_method
         self.__length = timestep_length
@@ -73,40 +60,68 @@ class BuildAlgorithms(object):
         self.__comments = comments
         self.__notes = notes
         self.__time_of_day = time_of_day
+        self.__normalized = normalized
 
-    def get_results(self):
-        _, train_data, train_label, _, _, _ = _load_data(self.__directory, self.__method, self.__length)
-        _, _, _, _, test_data, test_label = _load_data(self.__directory, self.__method, self.__length)
-        train_data, test_data = \
-            map(lambda x: _feature_selection(ds=x, vitals=self.__vitals, v_order=self.__v_order,
-                                             med_order=self.__med_order, comments=self.__comments,
-                                             notes=self.__notes, time_of_day=self.__time_of_day),
-                [train_data, test_data])
-        train_data, val_data, train_label, val_label = \
-            train_test_split(train_data, train_label, test_size=0.25, random_state=42)
-        train_data, train_label = _oversampling(train_data, train_label)
-        train_ds = _Create_dataset(train_data, train_label, repeat=True)
-        val_ds = _Create_dataset(val_data, val_label)
-        test_ds = _Create_dataset(test_data, test_label)
+    def get_results(self, calculate_CI=False):
+        if calculate_CI:
+            AUROC_list, AUPRC_list, sensibility_list, specificity_list, PPV_list, NPV_list, FScore_list \
+                = list(), list(), list(), list(), list(), list(), list()
+            variables = [AUROC_list, AUPRC_list, sensibility_list, specificity_list, PPV_list, NPV_list, FScore_list]
 
-        steps_per_epoch = len(train_data) // self.__batch_size
-        input_shape = train_data.shape[-2:]
-        RNN_model = self._make_model(self.__metrics, self.__algorithm, input_shape)
-        RNN_history = RNN_model.fit(
-            train_ds,
-            epochs=self.__epochs,
-            steps_per_epoch=steps_per_epoch,
-            callbacks=[self.__early_stopping],
-            validation_data=val_ds,
-            verbose=1
-        )
+            def append_list(variables, values):
+                for var, val in zip(variables, values):
+                    var.append(val)
 
-        #plot_metrics(RNN_history)
-        _, AUROC, AUPRC, precision, recall, TP, FP, TN, FN = \
-            RNN_model.evaluate(test_ds, batch_size=self.__batch_size, verbose=0)
-        NPV = TN/(TN+FN)
-        specificity = TN/(TN+FP)
-        FScore = 2/(recall**-1 + precision**-1)
+            for i in tqdm(list(range(100))):
+                train_ds, val_ds, test_ds, steps_per_epoch, input_shape \
+                    = _create_dataset(self.__directory, self.__method, self.__length, self.__normalized,
+                                      self.__vitals, self.__v_order, self.__med_order, self.__comments,
+                                      self.__notes, self.__time_of_day, self.__batch_size)
+
+                RNN_model = self._make_model(self.__metrics, self.__algorithm, input_shape)
+                RNN_history = RNN_model.fit(
+                    train_ds,
+                    epochs=self.__epochs,
+                    steps_per_epoch=steps_per_epoch,
+                    callbacks=[self.__early_stopping],
+                    validation_data=val_ds,
+                    verbose=0
+                )
+
+                # plot_metrics(RNN_history)
+                _, AUROC, AUPRC, precision, recall, TP, FP, TN, FN = \
+                    RNN_model.evaluate(test_ds, batch_size=self.__batch_size, verbose=0)
+                NPV = TN / (TN + FN)
+                specificity = TN / (TN + FP)
+                FScore = fscore_cal(recall, precision)
+
+                values = [AUROC, AUPRC, recall, specificity, precision, NPV, FScore]
+                append_list(variables, values)
+            AUROC, AUPRC, recall, specificity, precision, NPV, FScore \
+                = list(map(self._calculate_CI, variables))
+
+        else:
+            train_ds, val_ds, test_ds, steps_per_epoch, input_shape \
+                = _create_dataset(self.__directory, self.__method, self.__length, self.__normalized,
+                                  self.__vitals, self.__v_order, self.__med_order, self.__comments,
+                                  self.__notes, self.__time_of_day, self.__batch_size)
+
+            RNN_model = self._make_model(self.__metrics, self.__algorithm, input_shape)
+            RNN_history = RNN_model.fit(
+                train_ds,
+                epochs=self.__epochs,
+                steps_per_epoch=steps_per_epoch,
+                callbacks=[self.__early_stopping],
+                validation_data=val_ds,
+                verbose=1
+            )
+
+            #plot_metrics(RNN_history)
+            _, AUROC, AUPRC, precision, recall, TP, FP, TN, FN = \
+                RNN_model.evaluate(test_ds, batch_size=self.__batch_size, verbose=0)
+            NPV = TN/(TN+FN)
+            specificity = TN/(TN+FP)
+            FScore = fscore_cal(recall, precision)
 
         print('AUROC:{}, AUPRC:{}, sensitivity:{}, specificity:{}, PPV:{}, NPV:{}, F-Score:{}'
               .format(AUROC, AUPRC, recall, specificity, precision, NPV, FScore))
@@ -115,14 +130,14 @@ class BuildAlgorithms(object):
     def _make_model(self, metrics, algorithm, input_shape):
         if algorithm == 'GRU':
             RNN_model = tf.keras.Sequential([
-                tf.keras.layers.GRU(336, input_shape=input_shape),
-                tf.keras.layers.Dropout(0.3),
+                tf.keras.layers.GRU(96, input_shape=input_shape),
+                tf.keras.layers.Dropout(0.1),
                 tf.keras.layers.Dense(1, activation='sigmoid')
             ])
         else:
             RNN_model = tf.keras.Sequential([
-                tf.keras.layers.LSTM(240, input_shape=input_shape),
-                tf.keras.layers.Dropout(0.4),
+                tf.keras.layers.LSTM(48, input_shape=input_shape),
+                tf.keras.layers.Dropout(0.3),
                 tf.keras.layers.Dense(1, activation='sigmoid')
             ])
 
@@ -132,6 +147,13 @@ class BuildAlgorithms(object):
             metrics=metrics)
 
         return RNN_model
+
+    def _calculate_CI(self, value_list, alpha=0.95):
+        p = (1-alpha)/2*100
+        lower = np.percentile(value_list, p).round(3)
+        upper = np.percentile(value_list, 100-p).round(3)
+        mean = np.mean(value_list).round(3)
+        return '{} ({}, {})'.format(mean, lower, upper)
 
 
 def _load_data(directory, sampling_method, timestep_length):
@@ -144,6 +166,15 @@ def _load_data(directory, sampling_method, timestep_length):
     test_data = np.load(directory+folder+'/len'+timestep_length + '_' + 'test_data.npy')
     test_label = np.load(directory+folder+'/len'+timestep_length + '_' + 'test_label.npy')
     return point_train_data, train_data, train_label, point_test_data, test_data, test_label
+
+
+def _standardize_numeric_col(ds):
+    nm_ds = ds[:, :15]
+    mean = nm_ds.mean(axis=0)
+    std = nm_ds.std(axis=0)
+    standardized_ds = (nm_ds - mean) / std
+    standardized_ds = np.concatenate((standardized_ds, ds[:, 15:]), axis=1)
+    return standardized_ds
 
 
 def _feature_selection(ds, vitals=True, v_order=True, med_order=True,
@@ -174,16 +205,17 @@ def _feature_selection(ds, vitals=True, v_order=True, med_order=True,
 
 def _oversampling(train_data, train_label):
     pos_data, pos_label = resample(train_data[train_label == 1], train_label[train_label == 1],
-                                   n_samples=(train_label == 0).sum(), replace=True, random_state=0)
+                                   n_samples=(train_label == 0).sum(), replace=True)
     neg_data = train_data[train_label == 0]
     neg_label = train_label[train_label == 0]
     new_data = np.concatenate((pos_data, neg_data))
     new_label = np.concatenate([pos_label, neg_label], axis=None)
-    new_data, new_label = shuffle(new_data, new_label, random_state=0)
+    new_data, new_label = shuffle(new_data, new_label)
     return new_data, new_label
 
 
-def _Create_dataset(data, label, batch_size=128, repeat=False):
+def _batch_dataset(data, label, batch_size=128, repeat=False):
+    data, label = shuffle(data, label)
     dataset = tf.data.Dataset.from_tensor_slices((data, label))
     if repeat:
       dataset = dataset.batch(batch_size).repeat().prefetch(2)
@@ -192,16 +224,45 @@ def _Create_dataset(data, label, batch_size=128, repeat=False):
     return dataset
 
 
+def _create_dataset(directory, method, length, normalized, vitals, v_order, med_order, comments, notes, time_of_day, batch_size):
+    _, train_data, train_label, _, _, _ = _load_data(directory, method, length)
+    _, _, _, _, test_data, test_label = _load_data(directory, method, length)
+
+    if normalized:
+        train_data, test_data = \
+            map(lambda x: _standardize_numeric_col(ds=x), [train_data, test_data])
+    train_data, test_data = \
+        map(lambda x: _feature_selection(ds=x, vitals=vitals, v_order=v_order,
+                                         med_order=med_order, comments=comments,
+                                         notes=notes, time_of_day=time_of_day),
+            [train_data, test_data])
+
+    train_data, val_data, train_label, val_label = \
+        train_test_split(train_data, train_label, test_size=0.25)
+    print('train_data shape: {}'.format(train_data.shape))
+    train_data, train_label = _oversampling(train_data, train_label)
+    #val_data, val_label = _oversampling(val_data, val_label)
+    #test_data, test_label = _oversampling(test_data, test_label)
+
+    train_ds = _batch_dataset(train_data, train_label, repeat=True)
+    val_ds = _batch_dataset(val_data, val_label)
+    test_ds = _batch_dataset(test_data, test_label)
+
+    steps_per_epoch = len(train_data) // batch_size
+    input_shape = train_data.shape[-2:]
+    return train_ds, val_ds, test_ds, steps_per_epoch, input_shape
+
+
 class RNNHyperModel(HyperModel):
     _METRICS = [
         tf.keras.metrics.AUC(curve='ROC', name='AUROC'),
         tf.keras.metrics.AUC(curve='PR', name='AUPRC'),
-        tf.keras.metrics.Precision(name='precision', thresholds=0.6),
-        tf.keras.metrics.Recall(name='recall', thresholds=0.6),
-        tf.keras.metrics.TruePositives(name='tp', thresholds=0.6),
-        tf.keras.metrics.FalsePositives(name='fp', thresholds=0.6),
-        tf.keras.metrics.TrueNegatives(name='tn', thresholds=0.6),
-        tf.keras.metrics.FalseNegatives(name='fn', thresholds=0.6),
+        tf.keras.metrics.Precision(name='precision', thresholds=0.55),
+        tf.keras.metrics.Recall(name='recall', thresholds=0.55),
+        tf.keras.metrics.TruePositives(name='tp', thresholds=0.55),
+        tf.keras.metrics.FalsePositives(name='fp', thresholds=0.55),
+        tf.keras.metrics.TrueNegatives(name='tn', thresholds=0.55),
+        tf.keras.metrics.FalseNegatives(name='fn', thresholds=0.55),
     ]
 
     def __init__(self, input_shape, metrics=None, unit='GRU'):
@@ -232,21 +293,21 @@ class RNNHyperModel(HyperModel):
             ])
         RNN_model.compile(
             optimizer=tf.keras.optimizers.Adam(hp.Choice('learning_rate',
-                          values=[3e-2, 1e-3, 3e-4, 1e-4])),
+                          values=[1e-3, 3e-4, 1e-4, 5e-5])),
             loss=tf.keras.losses.BinaryCrossentropy(),
             metrics=self._metrics)
         return RNN_model
 
 
-def get_best_rnn(unit='LSTM'):
-    _DIRECTORY = '/home/user/dataset/'
+def get_best_rnn(unit='GRU'):
+    _DIRECTORY = '/home/liheng/Mat/Source_code/dataset_sorted/'
     _, train_data, train_label, _, _, _ = _load_data(_DIRECTORY, 'last', 60)
     train_data = _feature_selection(ds=train_data, time_of_day=True)
     train_data, val_data, train_label, val_label = train_test_split(train_data, train_label, test_size=0.25,
                                                                     random_state=0)
     train_data, train_label = _oversampling(train_data, train_label)
-    train_ds = _Create_dataset(train_data, train_label, repeat=True)
-    val_ds = _Create_dataset(val_data, val_label)
+    train_ds = _batch_dataset(train_data, train_label, repeat=True)
+    val_ds = _batch_dataset(val_data, val_label)
 
     BATCH_SIZE = 128
     steps_per_epoch = len(train_data) // BATCH_SIZE
@@ -256,10 +317,10 @@ def get_best_rnn(unit='LSTM'):
 
     tuner = Hyperband(
         RNN_model,
-        objective=kt.Objective("val_AUPRC", direction="max"),
-        max_epochs=10,
+        objective=kt.Objective("val_AUROC", direction="max"),
+        max_epochs=20,
         factor=3,
-        directory='/home/liheng/MAT1115/',
+        directory='/home/liheng/Mat/search',
         project_name='MAT_HyperGRU_60lastPRC')
     tuner.search_space_summary()
 

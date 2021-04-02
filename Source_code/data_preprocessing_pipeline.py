@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-
+from sklearn.model_selection import train_test_split
 
 class DataPipeline(object):
-    _FILE_NAME = '~/dataset_icu.csv'
+    _FILE_NAME = '/home/liheng/Mat/Source_code/dataset/dataset_icu.csv'
     _FILTER_OUTLIERS = False
     _SAMPLE_LENGTH = 24
     _TIME_GAP = 12
@@ -13,35 +13,39 @@ class DataPipeline(object):
     _FMEDORDERS = True
     _FCOMMENTS = True
     _FNOTES = True
-    _TOD = True
-    _SAVE_DIRECTORY = '/home/user/dataset/'
+    #_TOD = True
+    _SAVE_DIRECTORY = '/home/liheng/Mat/Source_code/dataset/'
 
     def __init__(self, file_name=None, filter_outliers=None, starttime='last', sample_length=None, time_gap=None,
-                 f_vitals=None, f_vorder=None, f_medorder=None, f_comments=None, f_notes=None,
-                 timestep_length=60, time_of_day=None, save_dir=None):
+                 matching=False, f_vitals=None, f_vorder=None, f_medorder=None, f_comments=None, f_notes=None,
+                 timestep_length=60, time_of_day=True, save_dir=None):
         self.__file_name = file_name or self._FILE_NAME
         self.__filter_outliers = filter_outliers or self._FILTER_OUTLIERS
         self.__starttime = starttime
         self.__sample_length = sample_length or self._SAMPLE_LENGTH
         self.__time_to_outcome = time_gap or self._TIME_GAP
+        self.__matching = matching
         self.__timestep_length = timestep_length
         self.__f_vitals = f_vitals or self._FVATIALS
         self.__f_vorder = f_vorder or self._FVORDERS
         self.__f_medorder = f_medorder or self._FMEDORDERS
         self.__f_comments = f_comments or self._FCOMMENTS
         self.__f_notes = f_notes or self._FNOTES
-        self.__time_of_day = time_of_day or self._TOD
+        self.__time_of_day = time_of_day
         self.__save_dir = save_dir or self._SAVE_DIRECTORY
 
     def get_results(self):
         df = self._data_formating(self.__file_name)
         train_co, test_co = self._data_sampling(df, self.__starttime, self.__sample_length, self.__time_to_outcome)
         train_f, test_f = self._feature_engineering(train_co, test_co)
+        print(self.__time_of_day)
         point_train_data, train_data, train_label, point_test_data, test_data, test_label = \
-            self._create_dataset(train_f, test_f, vitals=self.__f_vitals, v_order=self.__f_vorder,
+            self._create_dataset(train_f, test_f, matching=self.__matching,
+                                 vitals=self.__f_vitals, v_order=self.__f_vorder,
                                  med_order=self.__f_medorder, comments=self.__f_comments,
                                  notes=self.__f_notes, time_of_day=self.__time_of_day,
-                                 timestep_length=self.__timestep_length)
+                                 timestep_length=self.__timestep_length,
+                                 time_to_outcome=self.__time_to_outcome, sample_length=self.__sample_length)
         return point_train_data, train_data, train_label, point_test_data, test_data, test_label
 
     def save_array(self, point_train_data, train_data, train_label, point_test_data, test_data, test_label):
@@ -98,51 +102,46 @@ class DataPipeline(object):
                       len(icu_df[icu_df['outcome'] == 0]['dummy_encounter_id'].unique()),
                       len(icu_df[icu_df['outcome'] == 1]['dummy_encounter_id'].unique())))
 
-        # split dataset
-        ptlist = icu_df['dummy_encounter_id'].unique()
-        np.random.seed(20)
-        test_cohort_list = np.random.choice(ptlist, len(ptlist) // 4, replace=False)
-        test_cohort = icu_df[icu_df['dummy_encounter_id'].isin(test_cohort_list)]
-        train_cohort = icu_df[~icu_df['dummy_encounter_id'].isin(test_cohort_list)]
+        # split dataset into control and outcome set
+        control_list = icu_df[icu_df['outcome'] == 0]['dummy_encounter_id'].unique()
+        outcome_list = icu_df[icu_df['outcome'] == 1]['dummy_encounter_id'].unique()
+        control_cohort = icu_df[icu_df['dummy_encounter_id'].isin(control_list)]
+        outcome_cohort = icu_df[icu_df['dummy_encounter_id'].isin(outcome_list)]
 
         # split method
-        dfs = [train_cohort, test_cohort]
+        dfs = [control_cohort, outcome_cohort]
         sampled = []
 
         for icu_df in dfs:
             # first 00hrs
             if starttime == 'first':
                 icu_df['sample_start'] = icu_df['adm_time']
-                icu_df = icu_df[(icu_df['recorded_time'] < (icu_df['sample_start'] +
+                sampled_df = icu_df[(icu_df['recorded_time'] < (icu_df['sample_start'] +
                                                             pd.Timedelta(hours=sample_length)))]
-                icu_df.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
+                sampled_df.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
 
             elif starttime == 'last':
+                #
                 icu_df['sample_start'] = icu_df['proxyend_time'] - pd.Timedelta(hours=sample_length + time_to_outcome)
-                icu_df = icu_df[(icu_df['recorded_time'] >= icu_df['sample_start'])
+                sampled_df = icu_df[(icu_df['recorded_time'] >= icu_df['sample_start'])
                                 & (icu_df['recorded_time'] < (icu_df['sample_start'] +
                                                               pd.Timedelta(hours=sample_length)))]
-                icu_df.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
+                sampled_df.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
 
             elif starttime == 'random':
-                icu_df = random_sampling(icu_df, sample_length, time_to_outcome)
-            sampled.append(icu_df)
+                sampled_df = random_sampling(icu_df, sample_length, time_to_outcome)
+            sampled.append(sampled_df)
 
-        train_cohort, test_cohort = sampled
-        print("train cohort: {}, control: {}, outcome: {}"
-              .format(len(train_cohort['dummy_encounter_id'].unique()),
-                      len(train_cohort[train_cohort['outcome']==0]['dummy_encounter_id'].unique()),
-                      len(train_cohort[train_cohort['outcome']==1]['dummy_encounter_id'].unique())))
-        print("test cohort: {}, control: {}, outcome: {}"
-              .format(len(test_cohort['dummy_encounter_id'].unique()),
-                      len(test_cohort[test_cohort['outcome'] == 0]['dummy_encounter_id'].unique()),
-                      len(test_cohort[test_cohort['outcome'] == 1]['dummy_encounter_id'].unique())))
-        return train_cohort, test_cohort
+        control_cohort, outcome_cohort = sampled
+        print("control: {}, outcome: {}"
+              .format(len(control_list), len(outcome_list)))
 
-    def _feature_engineering(self, training_df, test_df):
+        return control_cohort, outcome_cohort
+
+    def _feature_engineering(self, control_cohort, outcome_cohort):
         columns = select_column(base=True, vitals=True, v_order=True, med_order=True, comments=True,
                               notes=True, nlp_topic=False)
-        dfs = [training_df, test_df]
+        dfs = [control_cohort, outcome_cohort]
         selected_dfs = []
         for df in dfs:
             # Calculate time of day variable
@@ -160,17 +159,18 @@ class DataPipeline(object):
             # select columns
             selectedcol_df = df.loc[:, columns]
             selected_dfs.append(selectedcol_df)
-        train_df, test_df = selected_dfs
-        return train_df, test_df
+        control_df, outcome_df = selected_dfs
+        return control_df, outcome_df
 
-    def _create_dataset(self, train_df, test_df, timestep_length=60, time_of_day=True, vitals=True, v_order=True,
-                        med_order=True, comments=True, notes=True):
-        steps = int(1440 / timestep_length)
+    def _create_dataset(self, control_df, outcome_df, matching=False, timestep_length=60,
+                        sample_length=24, time_to_outcome=12,
+                        time_of_day=True, vitals=True, v_order=True, med_order=True, comments=True, notes=True):
+        steps = int(sample_length*60 / timestep_length)
         timestep_length_str = str(timestep_length) + 'T'
-        dfs = [train_df, test_df]
+        dfs = [control_df, outcome_df]
         final_dataset = []
         columns = select_column(base=False, vitals=vitals, v_order=v_order, med_order=med_order,
-                              comments=comments, notes=notes)
+                                comments=comments, notes=notes)
         print('with columns: ', columns)
         # loop thru icu stays, training
         for df in dfs:
@@ -178,103 +178,194 @@ class DataPipeline(object):
             features = []
             overallcount = []
             icu_id = df['dummy_encounter_id'].unique()
-            df['timestep_iloc'] = pd.cut(df.time_of_day_minute, range(0, 1441, timestep_length), right=False,
-                                         labels=np.arange(1, 1+steps))
+            # df['timestep_iloc'] = pd.cut(df.time_of_day_minute, range(0, 1441, timestep_length), right=False,
+            #                             labels=np.arange(1, 1+steps))
+
             timeframe = pd.DataFrame(0, columns=df.columns,
                                      index=pd.timedelta_range(0, periods=steps, freq=timestep_length_str))
-            timeframe.drop(columns=['dummy_encounter_id', 'adm_time', 'outcome', 'time_of_day_minute', 'dt_start'],
+            timeframe.drop(columns=['dummy_encounter_id', 'adm_time', 'outcome', 'time_of_day_minute',
+                                    'sample_start', 'dt_start'],
                            inplace=True)
             for idx in tqdm(icu_id):
                 df_time = df[df['dummy_encounter_id'] == idx]
+                sample_start_hour = df_time['sample_start'].dt.hour.unique()
                 # label
-                labels.append(df_time['outcome'].unique()[0])
-                df_time = df_time.drop(columns=['dummy_encounter_id', 'adm_time', 'outcome', 'time_of_day_minute'])
+                label = df_time['outcome'].unique()[0]
+                df_time = df_time.drop(
+                    columns=['dummy_encounter_id', 'adm_time', 'outcome', 'time_of_day_minute', 'sample_start'])
                 df_time = df_time.set_index('dt_start')
                 # Create a single point dataset for logistic regression and tree models (overall counts of records)
-                point_features = df_time.iloc[:, :-1].sum(axis=0).values
+                point_features = df_time.sum(axis=0).values
                 # Resample data by given length of timestep
                 df_time = pd.concat([timeframe, df_time])
                 # Convert sequence to binary variables
-                df_time = df_time.resample(timestep_length_str).max()
-                df_time.iloc[:, :-1] = df_time.iloc[:, :-1] != 0
+                # df_time = df_time.resample(timestep_length_str).max()
+                # df_time.iloc[:, :-1] = df_time.iloc[:, :-1] != 0
+
+                # Convert sequence to counts per hour
+                cond = {col: 'sum' for col in columns}
+                df_time = df_time.resample(timestep_length_str).agg(cond)
+
                 # Select features
-                df_time = df_time.loc[:, columns+['timestep_iloc']]
+                df_time = df_time.loc[:, columns]
                 # Get the position of first record
-                frow = df_time.index.get_loc(df_time[df_time.any(axis=1)].index[0])
-                fcol = df_time.iloc[frow, -1] - 1
-                p = fcol - frow
-                if p < 0: p += steps
-                # Create time of day dummy variable
-                timestep_matrix = np.identity(steps)[:, np.arange(0 - p, steps - p)]
-                binary_features = df_time.iloc[:, :-1].to_numpy()
+                steps_per_day = int(1440 / timestep_length)
+                start_step = sample_start_hour * 60 / timestep_length
+                binary_features = df_time.to_numpy()
+
+                labels.append([label, sample_start_hour])
                 if time_of_day:
                     # concatenate features with time of day variable
-                    binary_features = np.concatenate((binary_features, timestep_matrix), axis=1)
-                    point_features = np.concatenate((point_features, timestep_matrix[0, :]), axis=None)
-                    assert binary_features.shape == (steps, len(columns) + steps), \
-                        'matrix shape:{}, expected: {}'.format(binary_features.shape, (steps, len(columns) + steps))
-                    assert point_features.shape == (len(columns) + steps,), \
-                        'matrix shape:{}, expected: {}'.format(point_features.shape, (len(columns) + steps),)
+                    binary_features = binary_features[np.arange(-start_step, steps_per_day - start_step, dtype='int')]
+                    point_features = np.concatenate((point_features, np.array(sample_start_hour)), axis=None)
+                    assert binary_features.shape == (steps, len(columns)), \
+                        'matrix shape:{}, expected: {}'.format(binary_features.shape,
+                                                               (steps, len(columns)))
+                    assert point_features.shape == (len(columns) + 1,), \
+                        'matrix shape:{}, expected: {}'.format(point_features.shape,
+                                                               (len(columns) + 1,))
                 else:
                     assert binary_features.shape == (steps, len(columns)), \
                         'matrix shape:{}, expected: {}'.format(binary_features.shape, (steps, len(columns)))
                     assert point_features.shape == (len(columns),), \
-                        'matrix shape:{}, expected: {}'.format(point_features.shape, (len(columns)), )
+                        'matrix shape:{}, expected: {}'.format(point_features.shape, (len(columns, )))
                 overallcount.append(point_features)
                 features.append(binary_features)
 
             final_dataset.append(np.array(overallcount, dtype='float64'))
             final_dataset.append(np.array(features, dtype='float64'))
             final_dataset.append(np.array(labels, dtype='float64'))
-
-        point_training_data, training_data, training_labels, point_holdout_data, holdout_data, holdout_labels \
+        point_control_data, control_data, control_labels, point_outcome_data, outcome_data, outcome_labels \
             = final_dataset
-        print("point_training_data: {}, training_data: {}, training_labels: {}, "
-              "point_holdout_data: {}, holdout_data: {}, holdout_labels: {}"
-              .format(point_training_data.shape, training_data.shape, training_labels.shape,
-                      point_holdout_data.shape, holdout_data.shape, holdout_labels.shape))
+
+        if matching:
+            point_training_data, training_data, training_labels, point_holdout_data, holdout_data, holdout_labels = \
+                _matching(point_control_data, control_data, control_labels, point_outcome_data, outcome_data,
+                          outcome_labels,
+                          match_ratio=40)
+
+        else:
+            point_data = np.concatenate((point_control_data, point_outcome_data))
+            series_data = np.concatenate((control_data, outcome_data))
+            labels = np.concatenate((control_labels, outcome_labels))
+            labels, _ = _label_format(labels)
+
+            point_training_data, point_holdout_data, training_labels, holdout_labels \
+                = train_test_split(point_data, labels, test_size=0.25, random_state=10)
+
+            training_data, holdout_data, training_labels, holdout_labels \
+                = train_test_split(series_data, labels, test_size=0.25, random_state=10)
 
         return point_training_data, training_data, training_labels, point_holdout_data, holdout_data, holdout_labels
 
 
+def _matching(point_control_data, control_data, control_labels, point_outcome_data, outcome_data, outcome_labels,
+              match_ratio=5):
+    # match by hour of outcome
+    np.random.seed(20)
+    # split outcome set into 120: 41
+    training_outcome_args = np.random.choice(len(outcome_labels), 120, replace=False)
+    training_point_outcome_data, training_outcome_data, training_outcome_labels = \
+        map(lambda x: np.take(x, training_outcome_args, axis=0), [point_outcome_data, outcome_data, outcome_labels])
+    holdout_point_outcome_data, holdout_outcome_data, holdout_outcome_labels = \
+        map(lambda x: np.delete(x, training_outcome_args, axis=0), [point_outcome_data, outcome_data, outcome_labels])
+    _, training_outcome_hour = _label_format(training_outcome_labels)
+    #holdout_outcome_labels, _ = _label_format(holdout_outcome_labels)
+    print("training outcome set shape: point_data {}, data {}, label{}"
+          .format(training_point_outcome_data.shape, training_outcome_data.shape, training_outcome_labels.shape))
+    print("holdout outcome set shape: point_data {}, data {}, label{}"
+          .format(holdout_point_outcome_data.shape, holdout_outcome_data.shape, holdout_outcome_labels.shape))
+
+    # split control set into 3:1
+    holdout_control_args = np.random.choice(len(control_labels), int(len(control_labels)/4), replace=False)
+    point_control_data_for_match, control_data_for_match, control_labels_for_match = \
+        map(lambda x: np.delete(x, holdout_control_args.astype('int64'), axis=0),
+            [point_control_data, control_data, control_labels])
+    holdout_point_control_data, holdout_control_data, holdout_control_labels = \
+        map(lambda x: np.take(x, holdout_control_args.astype('int64'), axis=0),
+            [point_control_data, control_data, control_labels])
+    #holdout_control_labels, _ = _label_format(holdout_control_labels)
+
+    # match training outcome set to training control set
+    training_control_args = np.array([])
+    outcome_hour, counts = np.unique(training_outcome_hour, return_counts=True)
+    for hour, count in zip(outcome_hour, counts):
+        print('hour:{}, count:{}'.format(hour, count))
+        control_args_part = np.argwhere(control_labels_for_match[:, 1] == hour).flatten()
+        training_control_args_part = np.random.choice(control_args_part, count * match_ratio, replace=True)
+        print('matched control count: ', len(training_control_args_part))
+        training_control_args = np.append(training_control_args, training_control_args_part)
+
+    training_point_control_data, training_control_data, training_control_labels = \
+        map(lambda x: np.take(x, training_control_args.astype('int64'), axis=0),
+            [point_control_data_for_match, control_data_for_match, control_labels_for_match])
+
+    #training_control_labels, training_control_hour = _label_format(training_control_labels)
+
+    print("training control set shape: point_data {}, data {}, label{}"
+          .format(training_point_control_data.shape, training_control_data.shape, training_control_labels.shape))
+    print("holdout control set shape: point_data {}, data {}, label{}"
+          .format(holdout_point_control_data.shape, holdout_control_data.shape, holdout_control_labels.shape))
+
+    point_training_data = np.concatenate((training_point_outcome_data, training_point_control_data), axis=0)
+    training_data = np.concatenate((training_outcome_data, training_control_data), axis=0)
+    training_labels = np.concatenate((training_outcome_labels, training_control_labels), axis=0)
+    training_labels, _ = _label_format(training_labels)
+
+    point_holdout_data = np.concatenate((holdout_point_outcome_data, holdout_point_control_data), axis=0)
+    holdout_data = np.concatenate((holdout_outcome_data, holdout_control_data), axis=0)
+    holdout_labels = np.concatenate((holdout_outcome_labels, holdout_control_labels), axis=0)
+    holdout_labels, _ = _label_format(holdout_labels)
+
+    print("point_training_data: {}, training_data: {}, training_labels: {}, "
+          "point_holdout_data: {}, holdout_data: {}, holdout_labels: {}"
+          .format(point_training_data.shape, training_data.shape, training_labels.shape,
+                  point_holdout_data.shape, holdout_data.shape, holdout_labels.shape))
+    return point_training_data, training_data, training_labels, point_holdout_data, holdout_data, holdout_labels
+
+
+def _label_format(labels):
+    labels, left_censor_hour = np.hsplit(labels, 2)
+    return map(lambda x: x.flatten(), [labels, left_censor_hour])
+
+
 def random_sampling(icu_df, sample_length, time_to_outcome):
-    # split into survival and outcome group
-    icu_o = icu_df[icu_df['outcome'] == 1]
-    icu_s = icu_df[icu_df['outcome'] == 0]
+    endpoint = icu_df['outcome'].values[0]
 
     # last 00hrs before 00hrs from outcomes for outcome groups
-    icu_o['sample_start'] = icu_o['proxyend_time'] - pd.Timedelta(hours=sample_length + time_to_outcome)
-    icu_o = icu_o[(icu_o['recorded_time'] >= icu_o['sample_start'])
-                  & (icu_o['recorded_time'] < (icu_o['sample_start'] + pd.Timedelta(hours=sample_length)))]
-    icu_o.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
+    if endpoint == 1:
+        icu_df['sample_start'] = icu_df['proxyend_time'] - pd.Timedelta(hours=sample_length + time_to_outcome)
+        sampled_df = icu_df[(icu_df['recorded_time'] >= icu_df['sample_start'])
+                        & (icu_df['recorded_time'] < (icu_df['sample_start'] + pd.Timedelta(hours=sample_length)))]
+        sampled_df.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
 
     # random slice before 00hrs from outcomes for survival groups
-    icu_st = icu_s.groupby('dummy_encounter_id').first()
-    icu_st['upper_bound'] = icu_st['proxyend_time'] - pd.Timedelta(hours=(sample_length + time_to_outcome))
-    icu_st['gap_unit'] = (icu_st['upper_bound'] - icu_st['adm_time']) / pd.Timedelta(minutes=60)
+    if endpoint == 0:
+        icu_st = icu_df.groupby('dummy_encounter_id').first()
+        icu_st['upper_bound'] = icu_st['proxyend_time'] - pd.Timedelta(hours=(sample_length + time_to_outcome))
+        icu_st['gap_unit'] = (icu_st['upper_bound'] - icu_st['adm_time']) / pd.Timedelta(minutes=60)
 
-    # Randomly draw start time of slices
-    sample_start = []
-    np.random.seed(0)
-    for i, unit in enumerate(icu_st['gap_unit'].to_list()):
-        try:
-            starttime = icu_st['adm_time'].iloc[i] + np.random.choice(int(unit + 1)) * pd.Timedelta(minutes=60)
-        except:
-            print(unit)
-            starttime = icu_st['adm_time'].iloc[i]
-        sample_start.append(starttime)
-    icu_st['sample_start'] = sample_start
-    # print('before concate; ', len(icu_st.index))
-    icu_sm = pd.merge(icu_s, icu_st['sample_start'], right_index=True, left_on='dummy_encounter_id')
-    # print('after concate; ', len(icu_sm['dummy_encounter_id'].unique()))
-    # slice
-    icu_sm = icu_sm[(icu_sm['recorded_time'] >= icu_sm['sample_start'])
-                    & (icu_sm['recorded_time'] < icu_sm['sample_start'] + pd.Timedelta(hours=sample_length))]
-    icu_sm.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
+        # Randomly draw start time of slices
+        sample_start = []
+        np.random.seed(0)
+        for i, unit in enumerate(icu_st['gap_unit'].to_list()):
+            try:
+                starttime = icu_st['adm_time'].iloc[i] + np.random.choice(int(unit + 1)) * pd.Timedelta(minutes=60)
+            except:
+                print(unit)
+                starttime = icu_st['adm_time'].iloc[i]
+            sample_start.append(starttime)
+        icu_st['sample_start'] = sample_start
+        # print('before concate; ', len(icu_st.index))
+        icu_sm = pd.merge(icu_df, icu_st['sample_start'], right_index=True, left_on='dummy_encounter_id')
+        # print('after concate; ', len(icu_sm['dummy_encounter_id'].unique()))
+        # slice
+        sampled_df = icu_sm[(icu_sm['recorded_time'] >= icu_sm['sample_start'])
+                        & (icu_sm['recorded_time'] < icu_sm['sample_start'] + pd.Timedelta(hours=sample_length))]
+        sampled_df.sort_values(by=['dummy_encounter_id', 'recorded_time'], inplace=True)
     # print('after slicing; ', len(icu_sm['dummy_encounter_id'].unique()))
-    # concat survival and outcome table
-    icu_df = pd.concat([icu_o, icu_sm])
-    return icu_df
+
+    return sampled_df
 
 
 def select_column(base=True, vitals=True, v_order=False, med_order=False, comments=False, notes=False, nlp_topic=False):
@@ -283,6 +374,7 @@ def select_column(base=True, vitals=True, v_order=False, med_order=False, commen
         'adm_time',
         'dt_start',
         'outcome',
+        'sample_start',
         'time_of_day_minute']
     _VITALSIGNS = [
         'hr_entered',

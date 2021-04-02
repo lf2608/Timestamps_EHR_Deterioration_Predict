@@ -4,8 +4,49 @@ import matplotlib.lines as mlines
 import seaborn as sns;
 
 sns.set()
-from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_curve, auc, roc_curve
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_curve, auc, roc_curve, average_precision_score
 from sklearn.calibration import calibration_curve
+
+
+#metrics
+def metrics(labels, predictions, p=0.5, **kwargs):
+    fp, tp, _ = roc_curve(labels, predictions)
+    AUROC = auc(fp, tp)
+    print('AUROC: ', AUROC)
+
+    cm = confusion_matrix(labels, predictions > p)
+    asc = accuracy_score(labels, predictions > p)
+    print('Accuracy: ', asc)
+    sensitivity = cm[1][1] / cm[1, :].sum()
+    specificity = cm[0][0] / cm[0, :].sum()
+    PPV = cm[1][1] / cm[:, 1].sum()
+    NPV = cm[0][0] / cm[:, 0].sum()
+
+    print('Sensitivity: ', sensitivity)
+    print('Specificity: ', specificity)
+    print('Positive Predictive Value: ', PPV)
+    print('Negative Predictive Value: ', NPV)
+
+    #precision, recall, thresholds = precision_recall_curve(labels, predictions)
+    AUPRC = average_precision_score(labels, predictions)
+    print('AUPRC score', AUPRC)
+
+    FScore = fscore_cal(sensitivity, PPV)
+
+    return AUROC, AUPRC, sensitivity, specificity, PPV, NPV, FScore
+
+
+def fscore_cal(recall, precision):
+    if recall == precision == 0:
+        FScore = 0
+    elif recall == 0:
+        FScore = 2 / (0 + precision ** -1)
+    elif precision == 0:
+        FScore = 2 / (0 + recall ** -1)
+    else:
+        FScore = 2 / (recall ** -1 + precision ** -1)
+    return FScore
+
 
 
 # Plots for model validation and diagnosis.
@@ -106,3 +147,5 @@ def plot_calibration(name, labels, predictions, **kwargs):
 
     plt.tight_layout()
     plt.plot(y, x, marker='o', linewidth=1, label=name)
+
+    
